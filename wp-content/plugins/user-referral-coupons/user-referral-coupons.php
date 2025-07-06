@@ -11,7 +11,7 @@
  * Text Domain:       user-referral-coupons
  * Domain Path:       /languages
  * WC requires at least: 3.0
- * WC tested up to: 8.0
+ * WC tested up to: 8.6
  */
 
 // If this file is called directly, abort.
@@ -23,6 +23,15 @@ define( 'URC_PLUGIN_VERSION', '1.0.0' );
 define( 'URC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'URC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'URC_COUPON_PREFIX', 'imm-' );
+
+/**
+ * Declare HPOS compatibility.
+ */
+add_action( 'before_woocommerce_init', function() {
+    if ( class_exists( \Automattic\WooCommerce\Utilities\FeaturesUtil::class ) ) {
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( 'custom_order_tables', __FILE__, true );
+    }
+} );
 
 /**
  * The core plugin class that is used to define internationalization,

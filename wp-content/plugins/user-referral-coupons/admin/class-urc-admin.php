@@ -188,29 +188,54 @@ class URC_Admin {
 	 * @return   array    Sanitized settings array.
 	 */
 	public function sanitize_settings( $input ) {
-		$sanitized_input = array();
+		$new_input = array();
+        $defaults = $this->get_default_options(); // Get defaults to ensure all keys are present
 
-		if ( isset( $input['coupon_discount_type'] ) ) {
-			$sanitized_input['coupon_discount_type'] = sanitize_text_field( $input['coupon_discount_type'] );
-		}
-		if ( isset( $input['coupon_amount'] ) ) {
-			$sanitized_input['coupon_amount'] = sanitize_text_field( $input['coupon_amount'] );
-		}
-        if ( isset( $input['coupon_expiry_days'] ) ) {
-			$sanitized_input['coupon_expiry_days'] = absint( $input['coupon_expiry_days'] );
-		}
-		if ( isset( $input['enable_commission'] ) ) {
-			$sanitized_input['enable_commission'] = absint( $input['enable_commission'] );
-		}
-		if ( isset( $input['commission_type'] ) ) {
-			$sanitized_input['commission_type'] = sanitize_text_field( $input['commission_type'] );
-		}
-		if ( isset( $input['commission_value'] ) ) {
-			$sanitized_input['commission_value'] = sanitize_text_field( $input['commission_value'] );
-		}
+		// General Coupon Settings
+		$new_input['coupon_discount_type'] = isset( $input['coupon_discount_type'] ) ? sanitize_text_field( $input['coupon_discount_type'] ) : $defaults['coupon_discount_type'];
+		$new_input['coupon_amount']        = isset( $input['coupon_amount'] ) ? sanitize_text_field( $input['coupon_amount'] ) : $defaults['coupon_amount'];
+		// Ensure coupon_amount is a string, WooCommerce expects it this way, validation for numeric can be added.
+        // For 'percent' type, WC_Coupon expects '10' for 10%. For fixed types, '10' for $10.
+        // We should ensure it's a format suitable for floatval() or direct use by WC.
+        // sanitize_text_field is okay, but wc_format_decimal() might be better if we need to enforce a numeric format.
+        // For now, sanitize_text_field is fine as WC_Coupon handles various inputs.
 
-		return $sanitized_input;
+		$new_input['coupon_expiry_days']   = isset( $input['coupon_expiry_days'] ) ? absint( $input['coupon_expiry_days'] ) : $defaults['coupon_expiry_days'];
+
+		// Commission Settings
+		// For a checkbox, if it's not in $input, it means it was unchecked.
+		$new_input['enable_commission']    = isset( $input['enable_commission'] ) ? 1 : 0;
+		$new_input['commission_type']      = isset( $input['commission_type'] ) ? sanitize_text_field( $input['commission_type'] ) : $defaults['commission_type'];
+		$new_input['commission_value']     = isset( $input['commission_value'] ) ? sanitize_text_field( $input['commission_value'] ) : $defaults['commission_value'];
+        // Similar to coupon_amount, ensure commission_value is a string.
+
+		return $new_input;
 	}
+
+    /**
+     * Get default plugin options (static version).
+     * Used for sanitization and initial setup.
+     * @return array Default options.
+     */
+    public static function get_static_default_options() {
+        return array(
+            'coupon_discount_type' => 'percent',
+            'coupon_amount'        => '10',
+            'coupon_expiry_days'   => 0,
+            'enable_commission'    => 0,
+            'commission_type'      => 'percent',
+            'commission_value'     => '5',
+        );
+    }
+
+    /**
+     * Get default plugin options (instance version).
+     * Used by instance methods like sanitize_settings.
+     * @return array Default options.
+     */
+    private function get_default_options() {
+        return self::get_static_default_options();
+    }
 
 	/**
 	 * Callback for the general settings section.
@@ -315,16 +340,18 @@ class URC_Admin {
      * Helper function to get plugin options with defaults.
      */
     public static function get_urc_options() {
-        $defaults = array(
-            'coupon_discount_type' => 'percent',
-            'coupon_amount'        => '10',
-            'coupon_expiry_days'   => 0, // 0 for no expiry
-            'enable_commission'    => 0,
-            'commission_type'      => 'percent',
-            'commission_value'     => '5',
-        );
-        $options = get_option( 'user-referral-coupons_options', $defaults );
-        return wp_parse_args( $options, $defaults );
+        $defaults = self::get_static_default_options(); // Use the static method for defaults
+        $options = get_option( 'user-referral-coupons_options' ); // Get saved options
+
+        // If options are not set in the database, $options will be false.
+        // In this case, wp_parse_args will correctly use $defaults.
+        // If options are set, they will be merged over $defaults.
+        // It's good to ensure $options is an array if it's not false, for robustness.
+        if ( false === $options ) {
+            $options = array(); // Ensure it's an array for wp_parse_args if it wasn't found
+        }
+
+        return wp_parse_args( (array) $options, $defaults );
     }
 
     /**

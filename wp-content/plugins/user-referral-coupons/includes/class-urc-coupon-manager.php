@@ -64,13 +64,18 @@ class URC_Coupon_Manager {
 			return new WP_Error( 'invalid_user_id', sprintf( __( 'User with ID %d not found.', 'user-referral-coupons' ), $user_id ) );
 		}
 
-        // Merge with default settings from admin
-        $default_settings = URC_Admin::get_urc_options();
-        $settings = wp_parse_args( $settings, $default_settings );
+        // $settings are expected to be pre-loaded by the caller using URC_Admin::get_urc_options()
+        // Ensure $settings is an array and provide defaults if it's not (though callers should ensure this)
+        if ( !is_array($settings) || empty($settings) ) {
+            // Fallback if $settings somehow not provided correctly by caller.
+            // This indicates an issue with the calling code if this branch is hit.
+            error_log('URC_Coupon_Manager::create_user_coupon was called with invalid or empty $settings.');
+            $settings = URC_Admin::get_urc_options();
+        }
 
-		$discount_type = isset( $settings['coupon_discount_type'] ) ? $settings['coupon_discount_type'] : 'percent';
-		$coupon_amount = isset( $settings['coupon_amount'] ) ? $settings['coupon_amount'] : '10'; // Default 10% or 10 units
-        $expiry_days = isset( $settings['coupon_expiry_days'] ) ? (int) $settings['coupon_expiry_days'] : 0;
+		$discount_type = $settings['coupon_discount_type']; // No fallback needed, get_urc_options ensures keys exist
+		$coupon_amount = $settings['coupon_amount'];
+        $expiry_days   = (int) $settings['coupon_expiry_days'];
 
 		$coupon_data = array(
 			'post_title'   => $coupon_code,

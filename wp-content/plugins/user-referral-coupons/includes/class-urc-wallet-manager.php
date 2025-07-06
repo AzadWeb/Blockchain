@@ -85,11 +85,11 @@ class URC_Wallet_Manager {
 
 			// Calculate commission
 			$commission_amount = 0;
-			$commission_type = isset( $settings['commission_type'] ) ? $settings['commission_type'] : 'percent';
-			$commission_value = isset( $settings['commission_value'] ) ? floatval( $settings['commission_value'] ) : 0;
+			$commission_type = $settings['commission_type']; // No fallback needed
+			$commission_value = floatval( $settings['commission_value'] ); // No fallback needed for key existence
 
 			if ( $commission_value <= 0 ) {
-				continue; // No commission value configured
+				continue; // No commission value configured or value is zero/negative
 			}
 
 			$order_total_for_commission = $order->get_subtotal() - $order->get_total_discount(); // Or $order->get_total()
