@@ -47,8 +47,52 @@ class URC_Admin {
 		add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_post_urc_generate_all_coupons', array( $this, 'handle_generate_all_coupons' ) );
+		add_action( 'admin_post_urc_reset_email_sent_status', array( $this, 'handle_reset_email_sent_status' ) );
 		add_action( 'admin_notices', array( $this, 'display_admin_notices' ) );
+        add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
+
+        // AJAX handlers
+        add_action( 'wp_ajax_urc_initiate_bulk_email', array( $this, 'ajax_initiate_bulk_email' ) );
+        add_action( 'wp_ajax_urc_process_bulk_email_batch', array( $this, 'ajax_process_bulk_email_batch' ) );
 	}
+
+    /**
+     * Enqueue admin scripts and styles.
+     *
+     * @since 1.0.0
+     * @param string $hook_suffix The current admin page.
+     */
+    public function enqueue_admin_scripts( $hook_suffix ) {
+        // Only load on our plugin's admin page.
+        // The hook_suffix for a top-level menu page is 'toplevel_page_{menu_slug}'.
+        if ( 'toplevel_page_' . $this->plugin_name !== $hook_suffix ) {
+            return;
+        }
+        wp_enqueue_script(
+            $this->plugin_name . '-admin-script',
+            URC_PLUGIN_URL . 'admin/js/urc-admin.js',
+            array( 'jquery' ),
+            URC_PLUGIN_VERSION,
+            true // In footer
+        );
+        wp_localize_script(
+            $this->plugin_name . '-admin-script',
+            'urcAdminAjax',
+            array(
+                'ajax_url' => admin_url( 'admin-ajax.php' ),
+                'nonce'    => wp_create_nonce( 'urc_admin_ajax_nonce' ),
+                'i18n'     => array(
+                    'processing'          => __( 'Processing...', 'user-referral-coupons' ),
+                    'error_please_try'    => __( 'An error occurred. Please try again.', 'user-referral-coupons' ),
+                    'complete'            => __( 'Bulk email process complete.', 'user-referral-coupons' ),
+                    'processed_users'     => __( 'Processed users', 'user-referral-coupons' ),
+                    'successfully_sent_to' => __( 'Successfully sent to:', 'user-referral-coupons' ),
+                    'failed_for'          => __( 'Failed for:', 'user-referral-coupons' ),
+                    'no_users_to_email'   => __( 'No users eligible for email.', 'user-referral-coupons' ),
+                )
+            )
+        );
+    }
 
 	/**
 	 * Add admin menu page.
@@ -78,12 +122,59 @@ class URC_Admin {
 			<h1><?php echo esc_html( get_admin_page_title() ); ?></h1>
 			<form action="options.php" method="post">
 				<?php
-				settings_fields( $this->plugin_name . '_settings' ); // Group name
-				do_settings_sections( $this->plugin_name );          // Page slug
+				settings_fields( $this->plugin_name . '_settings' ); // Group name for general coupon and commission settings
+                settings_fields( $this->plugin_name . '_email_settings_group' ); // Group name for email settings
+				do_settings_sections( $this->plugin_name );          // Page slug (common for all sections on this page)
 				submit_button( __( 'Save Settings', 'user-referral-coupons' ) );
 				?>
 			</form>
 
+            <hr>
+            <!-- Bulk Email Sender UI will go here later -->
+            <div id="urc-bulk-email-sender-section">
+                <h2><?php esc_html_e( 'Bulk Coupon Email Sender', 'user-referral-coupons' ); ?></h2>
+
+                <?php
+                $user_query = new WP_User_Query( array(
+                    'count_total' => true,
+                ) );
+                $total_users = $user_query->get_total();
+
+                $users_emailed_query = new WP_User_Query( array(
+                    'meta_key'    => '_urc_coupon_email_sent_v1',
+                    'meta_compare' => 'EXISTS',
+                    'count_total' => true,
+                ) );
+                $users_emailed_count = $users_emailed_query->get_total();
+                $users_eligible_count = $total_users - $users_emailed_count;
+                ?>
+                <p>
+                    <?php printf( esc_html__( 'Total Users: %d', 'user-referral-coupons' ), (int) $total_users ); ?><br>
+                    <?php printf( esc_html__( 'Users Already Emailed (this campaign): %d', 'user-referral-coupons' ), (int) $users_emailed_count ); ?><br>
+                    <?php printf( esc_html__( 'Users Eligible for this Email Campaign: %d', 'user-referral-coupons' ), (int) $users_eligible_count ); ?>
+                </p>
+
+                <div id="urc-bulk-email-feedback"></div>
+                <p>
+                    <button type="button" id="urc-initiate-bulk-email" class="button button-primary" <?php echo $users_eligible_count === 0 ? 'disabled' : ''; ?>>
+                        <?php esc_html_e( 'Process and Send Coupon Emails to Eligible Users', 'user-referral-coupons' ); ?>
+                    </button>
+                </p>
+                <p>
+                    <form method="post" action="<?php echo admin_url( 'admin-post.php' ); ?>" style="display: inline;">
+                        <input type="hidden" name="action" value="urc_reset_email_sent_status">
+                        <?php wp_nonce_field( 'urc_reset_email_sent_status_action', 'urc_reset_email_sent_status_nonce' ); ?>
+                        <button type="submit" id="urc-reset-email-status" class="button button-caution" onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to reset the email sent status for all users? This will allow the bulk sender to email them again.', 'user-referral-coupons' ); ?>');">
+                            <?php esc_html_e( 'Reset Email Sent Status for All Users', 'user-referral-coupons' ); ?>
+                        </button>
+                    </form>
+                </p>
+                 <div id="urc-bulk-email-progress-bar-container" style="width: 100%; background-color: #f3f3f3; border: 1px solid #ccc; margin-top:10px; display:none;">
+                    <div id="urc-bulk-email-progress-bar" style="width: 0%; height: 20px; background-color: #4caf50; text-align: center; line-height: 20px; color: white;">0%</div>
+                </div>
+                <div id="urc-bulk-email-log" style="max-height: 200px; overflow-y: auto; border: 1px solid #eee; padding: 5px; margin-top:10px; display:none;"></div>
+
+            </div>
             <hr>
             <h2><?php esc_html_e( 'Manual Coupon Generation', 'user-referral-coupons' ); ?></h2>
             <p><?php esc_html_e( 'Use the button below to generate referral coupons for all existing users who do not currently have one.', 'user-referral-coupons' ); ?></p>
@@ -178,6 +269,44 @@ class URC_Admin {
 			$this->plugin_name . '_commission_section', // Section
 			array( 'label_for' => 'commission_value' )
 		);
+
+		// Email Settings Section
+		add_settings_section(
+			$this->plugin_name . '_email_section', // ID
+			__( 'Coupon Email Sender Settings', 'user-referral-coupons' ), // Title
+			array( $this, 'email_section_callback' ), // Callback
+			$this->plugin_name // Page slug
+		);
+
+		add_settings_field(
+			'email_subject', // ID
+			__( 'Email Subject', 'user-referral-coupons' ), // Title
+			array( $this, 'render_email_subject_field' ), // Callback
+			$this->plugin_name, // Page slug
+			$this->plugin_name . '_email_section' // Section ID
+		);
+
+		add_settings_field(
+			'email_body', // ID
+			__( 'Email Body', 'user-referral-coupons' ), // Title
+			array( $this, 'render_email_body_field' ), // Callback
+			$this->plugin_name, // Page slug
+			$this->plugin_name . '_email_section' // Section ID
+		);
+
+        add_settings_field(
+			'send_on_new_registration', // ID
+			__( 'New User Email', 'user-referral-coupons' ), // Title
+			array( $this, 'render_send_on_new_registration_field' ), // Callback
+			$this->plugin_name, // Page slug
+			$this->plugin_name . '_email_section' // Section ID
+		);
+
+        register_setting(
+			$this->plugin_name . '_email_settings_group', // Option group for email settings
+			'user-referral-coupons_email_options',  // Option name
+			array( $this, 'sanitize_email_settings' ) // Sanitize callback
+		);
 	}
 
 	/**
@@ -236,6 +365,60 @@ class URC_Admin {
     private function get_default_options() {
         return self::get_static_default_options();
     }
+
+    /**
+     * Get default email plugin options (static version).
+     * @return array Default email options.
+     */
+    public static function get_static_default_email_options() {
+        return array(
+            'email_subject'            => __( 'Your Referral Coupon from {site_name}!', 'user-referral-coupons' ),
+            'email_body'               => self::get_default_email_body(),
+            'send_on_new_registration' => 0, // Default to off
+        );
+    }
+
+    /**
+     * Get default email body content.
+     * @return string Default email body.
+     */
+    private static function get_default_email_body() {
+        $body = "<p>" . __( "Hi {user_display_name},", 'user-referral-coupons' ) . "</p>\n\n";
+        $body .= "<p>" . __( "Thanks for being a valued member of {site_name}!", 'user-referral-coupons' ) . "</p>\n\n";
+        $body .= "<p>" . __( "You can invite your friends to make a purchase with your exclusive referral coupon code:", 'user-referral-coupons' ) . " <strong>{coupon_code}</strong></p>\n\n";
+        $body .= "<p>" . __( "This coupon gives: {coupon_details}.", 'user-referral-coupons' ) . "</p>\n\n";
+        $body .= "<p>" . sprintf(__( 'Share it with your friends and let them enjoy the benefits! Visit us at <a href="%s">%s</a>.', 'user-referral-coupons' ), '{site_url}', '{site_name}') . "</p>\n\n";
+        $body .= "<p>" . __( "Thanks,", 'user-referral-coupons' ) . "<br>\n";
+        $body .= "{site_name}</p>";
+        return $body;
+    }
+
+
+	/**
+	 * Sanitize email settings.
+	 *
+	 * @since    1.0.0
+	 * @param    array    $input    The settings array.
+	 * @return   array    Sanitized settings array.
+	 */
+	public function sanitize_email_settings( $input ) {
+		$new_input = array();
+		$defaults = self::get_static_default_email_options();
+
+		$new_input['email_subject'] = isset( $input['email_subject'] ) ? sanitize_text_field( $input['email_subject'] ) : $defaults['email_subject'];
+
+        if ( isset( $input['email_body'] ) ) {
+            // Allow most HTML, similar to post content.
+            // wp_kses_post is good for display, but for saving, we might want a bit more control or trust admin input.
+            // For now, use wp_kses_post to ensure safe HTML.
+             $new_input['email_body'] = wp_kses_post( $input['email_body'] );
+        } else {
+            $new_input['email_body'] = $defaults['email_body'];
+        }
+		$new_input['send_on_new_registration'] = isset( $input['send_on_new_registration'] ) ? 1 : 0;
+
+		return $new_input;
+	}
 
 	/**
 	 * Callback for the general settings section.
@@ -353,6 +536,222 @@ class URC_Admin {
 
         return wp_parse_args( (array) $options, $defaults );
     }
+
+    /**
+     * Callback for the email settings section.
+     *
+     * @since    1.0.0
+     */
+    public function email_section_callback() {
+        echo '<p>' . esc_html__( 'Configure the email template sent to users with their coupon code.', 'user-referral-coupons' ) . '</p>';
+        echo '<p><strong>' . esc_html__( 'Available placeholders for Subject and Body:', 'user-referral-coupons') . '</strong><br>';
+        echo '<code>{user_first_name}</code>, <code>{user_last_name}</code>, <code>{user_display_name}</code>, <code>{user_email}</code>, ';
+        echo '<code>{coupon_code}</code>, <code>{coupon_details}</code>, <code>{site_name}</code>, <code>{site_url}</code></p>';
+    }
+
+    /**
+     * Render email subject field.
+     * @since 1.0.0
+     */
+    public function render_email_subject_field() {
+        $options = get_option( 'user-referral-coupons_email_options', self::get_static_default_email_options() );
+        $value = $options['email_subject'];
+        ?>
+        <input type="text" id="email_subject" name="user-referral-coupons_email_options[email_subject]" value="<?php echo esc_attr( $value ); ?>" class="regular-text" />
+        <?php
+    }
+
+    /**
+     * Render email body field.
+     * @since 1.0.0
+     */
+    public function render_email_body_field() {
+        $options = get_option( 'user-referral-coupons_email_options', self::get_static_default_email_options() );
+        $value = $options['email_body'];
+        wp_editor( $value, 'email_body_editor', array(
+            'textarea_name' => 'user-referral-coupons_email_options[email_body]',
+            'textarea_rows' => 10,
+            'media_buttons' => false, // No media buttons in email editor
+            'tinymce'       => true, // Use TinyMCE
+            'quicktags'     => true
+        ) );
+    }
+
+    /**
+     * Render 'Send on new registration' field.
+     * @since 1.0.0
+     */
+    public function render_send_on_new_registration_field() {
+        $options = get_option( 'user-referral-coupons_email_options', self::get_static_default_email_options() );
+        $value = isset( $options['send_on_new_registration'] ) ? $options['send_on_new_registration'] : 0;
+		?>
+		<input type="checkbox" id="send_on_new_registration" name="user-referral-coupons_email_options[send_on_new_registration]" value="1" <?php checked( $value, 1 ); ?> />
+		<label for="send_on_new_registration"><?php esc_html_e( 'Send coupon welcome email to new users upon their registration.', 'user-referral-coupons' ); ?></label>
+		<?php
+    }
+
+    /**
+     * Handle resetting the email sent status for all users.
+     *
+     * @since 1.0.0
+     */
+    public function handle_reset_email_sent_status() {
+        if ( ! isset( $_POST['urc_reset_email_sent_status_nonce'] ) || ! wp_verify_nonce( sanitize_key($_POST['urc_reset_email_sent_status_nonce']), 'urc_reset_email_sent_status_action' ) ) {
+            wp_die( esc_html__( 'Nonce verification failed.', 'user-referral-coupons' ), 'Error', array( 'response' => 403 ) );
+        }
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You do not have sufficient permissions to perform this action.', 'user-referral-coupons' ), 'Error', array( 'response' => 403 ) );
+        }
+
+        global $wpdb;
+        // Directly delete user meta for all users. This is more efficient than looping through get_users.
+        $deleted_count = $wpdb->query( $wpdb->prepare( "DELETE FROM $wpdb->usermeta WHERE meta_key = %s", '_urc_coupon_email_sent_v1' ) );
+
+        // $deleted_count might be number of rows affected, or false on error.
+        // For a more accurate count of users affected, one might need to query users who had the meta first.
+        // However, for this purpose, confirming the action was run is often sufficient.
+
+        $notices = array(array(
+            'type'    => 'success',
+            // Message can be generic as $deleted_count from $wpdb->query might not be the user count.
+            'message' => __( 'Email sent status has been reset for all users.', 'user-referral-coupons' ),
+        ));
+        if (false === $deleted_count) {
+             $notices = array(array(
+                'type'    => 'error',
+                'message' => __( 'Failed to reset email status. Please check logs.', 'user-referral-coupons' ),
+            ));
+        }
+
+        set_transient( $this->plugin_name . '_admin_notices', $notices, 30 );
+        wp_safe_redirect( admin_url( 'admin.php?page=' . $this->plugin_name ) );
+        exit;
+    }
+
+    /**
+     * AJAX handler to initiate bulk email sending.
+     * Prepares a list of eligible users and stores it in a transient.
+     */
+    public function ajax_initiate_bulk_email() {
+        check_ajax_referer( 'urc_admin_ajax_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Permission denied.', 'user-referral-coupons' ) ) );
+        }
+
+        $all_user_ids = get_users( array( 'fields' => 'ID', 'orderby' => 'ID', 'order' => 'ASC' ) );
+        $eligible_user_ids = array();
+
+        foreach ( $all_user_ids as $user_id ) {
+            if ( ! get_user_meta( $user_id, '_urc_coupon_email_sent_v1', true ) ) {
+                // Also check if user has a coupon
+                if ( URC_Coupon_Manager::get_user_referral_coupon( $user_id ) ) {
+                    $eligible_user_ids[] = $user_id;
+                }
+            }
+        }
+
+        $batch_size = apply_filters('urc_bulk_email_batch_size', 20);
+        set_transient( 'urc_bulk_email_user_ids_queue', $eligible_user_ids, HOUR_IN_SECONDS ); // Store for 1 hour
+        set_transient( 'urc_bulk_email_batch_size', $batch_size, HOUR_IN_SECONDS);
+
+
+        wp_send_json_success( array(
+            'total_eligible' => count( $eligible_user_ids ),
+            'batch_size'     => $batch_size,
+        ) );
+    }
+
+    /**
+     * AJAX handler to process a batch of emails.
+     */
+    public function ajax_process_bulk_email_batch() {
+        check_ajax_referer( 'urc_admin_ajax_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Permission denied.', 'user-referral-coupons' ) ) );
+        }
+
+        $eligible_user_ids = get_transient( 'urc_bulk_email_user_ids_queue' );
+        $batch_size = get_transient( 'urc_bulk_email_batch_size' );
+
+        if ( false === $eligible_user_ids || false === $batch_size) {
+            wp_send_json_error( array( 'message' => __( 'Email queue not found or expired. Please initiate again.', 'user-referral-coupons' ) ) );
+        }
+        if (!is_array($eligible_user_ids)) {
+             $eligible_user_ids = array(); // ensure it's an array
+        }
+
+
+        $offset = isset( $_POST['offset'] ) ? absint( $_POST['offset'] ) : 0;
+        // The JS sends offset based on total processed. We need to pick from the $eligible_user_ids array.
+        // The JS offset is the number of items already processed from the eligible list.
+
+        $current_batch_user_ids = array_slice( $eligible_user_ids, $offset, $batch_size );
+
+        $success_count = 0;
+        $failure_count = 0;
+        $processed_in_this_batch = 0;
+        $log_messages = array();
+
+        if ( empty( $current_batch_user_ids ) ) {
+             wp_send_json_success( array(
+                'processed_in_batch' => 0,
+                'successes'          => 0,
+                'failures'           => 0,
+                'log_messages'       => array(__('No users left in this batch from queue.', 'user-referral-coupons')),
+                'current_offset'     => $offset, // current offset + processed
+                'total_eligible'     => count($eligible_user_ids)
+            ) );
+            return;
+        }
+
+
+        foreach ( $current_batch_user_ids as $user_id ) {
+            $processed_in_this_batch++;
+            $user = get_user_by('id', $user_id);
+            if (!$user) {
+                $failure_count++;
+                $log_messages[] = sprintf(__('User ID %d not found. Skipped.', 'user-referral-coupons'), $user_id);
+                continue;
+            }
+
+            // Double check meta, though initial list should be eligible
+            if ( get_user_meta( $user_id, '_urc_coupon_email_sent_v1', true ) ) {
+                // $log_messages[] = sprintf(__('User ID %d (%s) already marked as emailed. Skipped.', 'user-referral-coupons'), $user_id, $user->user_email);
+                // This case should ideally not happen if the initial eligible list is correct.
+                // If it does, it means something else marked them, or the list is stale.
+                // For simplicity, we don't count this as a failure or success for this batch's purpose,
+                // as it wasn't an "attempt" for this batch.
+                // Or, more accurately, the definition of "processed_in_this_batch" should be "attempted".
+                continue;
+            }
+
+
+            if ( URC_Email_Manager::send_coupon_email( $user_id ) ) {
+                update_user_meta( $user_id, '_urc_coupon_email_sent_v1', time() );
+                $success_count++;
+                // $log_messages[] = sprintf(__('Email sent to %s.', 'user-referral-coupons'), $user->user_email);
+            } else {
+                $failure_count++;
+                $log_messages[] = sprintf(__('Failed to send email to %s (User ID %d).', 'user-referral-coupons'), $user->user_email, $user_id);
+            }
+        }
+
+        // No need to update the transient queue here, as we just process a slice.
+        // The offset for next batch will be current_offset + $processed_in_this_batch
+
+        wp_send_json_success( array(
+            'processed_in_batch' => $processed_in_this_batch, // Number of users attempted in this specific AJAX call
+            'successes'          => $success_count,
+            'failures'           => $failure_count,
+            'log_messages'       => $log_messages,
+            'current_offset'     => $offset + $processed_in_this_batch, // JS uses this to know the new global offset
+            'total_eligible'     => count($eligible_user_ids) // Total number of users in the transient queue
+        ) );
+    }
+
 
     /**
      * Handle the manual generation of coupons for all users.

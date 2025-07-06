@@ -67,6 +67,7 @@ class User_Referral_Coupons {
 		require_once URC_PLUGIN_DIR . 'public/class-urc-public.php';
 		require_once URC_PLUGIN_DIR . 'includes/class-urc-coupon-manager.php';
 		require_once URC_PLUGIN_DIR . 'includes/class-urc-wallet-manager.php';
+		require_once URC_PLUGIN_DIR . 'includes/class-urc-email-manager.php';
 	}
 
 	/**
@@ -181,6 +182,21 @@ class User_Referral_Coupons {
             // e.g., send an email, add user meta, etc.
             // For now, just logging success for debugging.
             // error_log( sprintf( 'User Referral Coupons: Successfully created coupon for new user ID %d. Coupon ID: %d', $user_id, $result ) );
+
+            // Attempt to send email if coupon was created successfully and setting is enabled
+            if ( !is_wp_error($result) && class_exists('URC_Email_Manager') ) {
+                $email_settings = URC_Email_Manager::get_email_settings();
+                if ( !empty($email_settings['send_on_new_registration']) ) {
+                    $email_sent = URC_Email_Manager::send_coupon_email( $user_id );
+                    if ($email_sent) {
+                        update_user_meta( $user_id, '_urc_coupon_email_sent_v1', time() );
+                        // error_log( sprintf( 'User Referral Coupons: Welcome coupon email sent to new user ID %d.', $user_id ) );
+                    } else {
+                        // error_log( sprintf( 'User Referral Coupons: Failed to send welcome coupon email to new user ID %d.', $user_id ) );
+                    }
+                }
+            }
+
         }
     }
 
